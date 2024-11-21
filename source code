@@ -1,0 +1,93 @@
+# auth.py
+import sqlite3
+import bcrypt
+
+def create_user(username, password):
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, hashed))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        print("Username already exists.")
+    finally:
+        conn.close()
+
+def authenticate_user(username, password):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT password FROM users WHERE username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    if user and bcrypt.checkpw(password.encode(), user[0]):
+        return True
+    return False
+# transaction.py
+def add_transaction(user_id, trans_type, category, amount, date):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO transactions (user_id, type, category, amount, date) 
+        VALUES (?, ?, ?, ?, ?)""", (user_id, trans_type, category, amount, date))
+    conn.commit()
+    conn.close()
+
+def update_transaction(trans_id, updates):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    # Assume updates is a dictionary
+    for key, value in updates.items():
+        cursor.execute(f"UPDATE transactions SET {key} = ? WHERE id = ?", (value, trans_id))
+    conn.commit()
+    conn.close()
+# report.py
+def generate_monthly_report(user_id, month, year):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT type, category, SUM(amount) 
+        FROM transactions 
+        WHERE user_id = ? AND strftime('%m', date) = ? AND strftime('%Y', date) = ?
+        GROUP BY type, category""", (user_id, f"{month:02}", year))
+    report = cursor.fetchall()
+    conn.close()
+    return report
+# budget.py
+def set_budget(user_id, category, limit):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO budgets (user_id, category, limit) VALUES (?, ?, ?)
+        ON CONFLICT(user_id, category) DO UPDATE SET limit = excluded.limit""",
+        (user_id, category, limit))
+    conn.commit()
+    conn.close()
+
+def check_budget(user_id, category):
+    conn = sqlite3.connect("finance.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT SUM(amount), b.limit FROM transactions t
+        JOIN budgets b ON t.category = b.category
+        WHERE t.user_id = ? AND b.user_id = ? AND t.category = ?
+        GROUP BY t.category""", (user_id, user_id, category))
+    result = cursor.fetchone()
+    conn.close()
+    if result and result[0] > result[1]:
+        return True  # Budget exceeded
+    return False
+# database.py
+def backup_database(file_path):
+    conn = sqlite3.connect("finance.db")
+    with open(file_path, 'w') as f:
+        for line in conn.iterdump():
+            f.write(f"{line}\n")
+    conn.close()
+
+def restore_database(file_path):
+    conn = sqlite3.connect("finance.db")
+    with open(file_path, 'r') as f:
+        script = f.read()
+    conn.executescript(script)
+    conn.close()
